@@ -259,6 +259,41 @@ func TestRunUsesRemainingDaysWhenPresent(t *testing.T) {
 	}
 }
 
+func TestFarFutureExpiryReturnsRealRemainingDays(t *testing.T) {
+	now := time.Date(2026, time.May, 30, 12, 0, 0, 0, time.UTC)
+	target := dnshe.Subdomain{
+		ID:        1,
+		ExpiresAt: "2999-12-31 23:59:59",
+	}
+
+	if shouldRenewSubdomain(now, target) {
+		t.Fatalf("%s should not enter renew window", target.ExpiresAt)
+	}
+	if got := resolveSubdomainExpiry(target); got != target.ExpiresAt {
+		t.Fatalf("expires_at = %q, want %q", got, target.ExpiresAt)
+	}
+	got := resolveRemainingDays(now, target)
+	if got == nil {
+		t.Fatalf("remaining_days = nil, want real days")
+	}
+	if *got != 355596 {
+		t.Fatalf("remaining_days = %d, want 355596", *got)
+	}
+}
+
+func TestDaysUntilDoesNotSaturateForFarFutureDate(t *testing.T) {
+	now := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	target := time.Date(2998, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+	got := daysUntil(now, target)
+	if got == nil {
+		t.Fatalf("daysUntil returned nil")
+	}
+	if *got <= 106751 {
+		t.Fatalf("daysUntil = %d, want greater than saturated duration days", *got)
+	}
+}
+
 func TestRunTreatsRenewNotYetAvailableAsSkip(t *testing.T) {
 	now := time.Now().UTC()
 	renewCalls := 0

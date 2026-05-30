@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	renewWindow               = 180 * 24 * time.Hour
+	renewWindowDays           = 180
 	rateLimitErrorCode        = "rate_limit_exceeded"
 	maxRateLimitRetries       = 2
 	maxRateLimitRetryInterval = 2 * time.Minute
@@ -256,11 +256,11 @@ func shouldRenewSubdomain(now time.Time, target dnshe.Subdomain) bool {
 	}
 
 	if target.RemainingDays != nil {
-		return *target.RemainingDays < 180
+		return *target.RemainingDays < renewWindowDays
 	}
 
 	if expiresAt, ok := parseSubdomainTime(target.ExpiresAt); ok {
-		return expiresAt.Sub(now) < renewWindow
+		return *daysUntil(now, expiresAt) < renewWindowDays
 	}
 
 	baseTime, ok := parseLatestSubdomainTimestamp(target)
@@ -268,7 +268,7 @@ func shouldRenewSubdomain(now time.Time, target dnshe.Subdomain) bool {
 		return false
 	}
 
-	return baseTime.AddDate(1, 0, 0).Sub(now) < renewWindow
+	return *daysUntil(now, baseTime.AddDate(1, 0, 0)) < renewWindowDays
 }
 
 // resolveSubdomainExpiry 返回子域名的可展示到期时间。
@@ -305,8 +305,15 @@ func resolveRemainingDays(now time.Time, target dnshe.Subdomain) *int {
 
 // daysUntil 以自然日近似返回从当前时间到目标时间的剩余天数。
 func daysUntil(now time.Time, target time.Time) *int {
-	days := int(target.Sub(now).Hours() / 24)
+	days := dateOrdinal(target.UTC()) - dateOrdinal(now.UTC())
 	return &days
+}
+
+// dateOrdinal 返回公历日期序号，避免远未来日期触发 time.Duration 上限。
+func dateOrdinal(ts time.Time) int {
+	year := ts.Year()
+	previousYear := year - 1
+	return previousYear*365 + previousYear/4 - previousYear/100 + previousYear/400 + ts.YearDay()
 }
 
 // parseLatestSubdomainTimestamp 取 created_at 和 updated_at 中较新的时间。
