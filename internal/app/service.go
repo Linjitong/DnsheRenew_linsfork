@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -11,7 +12,12 @@ import (
 	"dnsherene/pkg/dnshe"
 )
 
-const renewWindow = 180 * 24 * time.Hour
+const (
+	renewWindow               = 180 * 24 * time.Hour
+	rateLimitErrorCode        = "rate_limit_exceeded"
+	maxRateLimitRetries       = 2
+	maxRateLimitRetryInterval = 2 * time.Minute
+)
 
 // Result 表示一次续期任务的结构化结果。
 type Result struct {
@@ -59,7 +65,7 @@ func NewService(dnsClient *dnshe.Client) (*Service, error) {
 func (s *Service) Run(ctx context.Context, dryRun bool) (Result, error) {
 	result := Result{}
 
-	targets, err := s.dnsClient.ListSubdomains(ctx)
+	targets, err := s.listSubdomainsWithRateLimitRetry(ctx)
 	if err != nil {
 		return result, err
 	}
@@ -83,8 +89,11 @@ func (s *Service) Run(ctx context.Context, dryRun bool) (Result, error) {
 	failureReasonSeen := make(map[string]struct{})
 
 	for _, target := range targets {
-		renewResult, renewErr := s.dnsClient.RenewSubdomain(ctx, target.ID)
+		renewResult, renewErr := s.renewSubdomainWithRateLimitRetry(ctx, target.ID)
 		if renewErr != nil {
+			if errors.Is(renewErr, context.Canceled) || errors.Is(renewErr, context.DeadlineExceeded) {
+				return result, renewErr
+			}
 			if isRenewNotYetAvailableError(renewErr) {
 				continue
 			}
@@ -129,6 +138,87 @@ func (s *Service) Run(ctx context.Context, dryRun bool) (Result, error) {
 		}
 	}
 	return result, nil
+}
+
+// listSubdomainsWithRateLimitRetry 对子域名列表请求中的 DNSHE 限流错误做有限退避重试。
+func (s *Service) listSubdomainsWithRateLimitRetry(ctx context.Context) ([]dnshe.Subdomain, error) {
+	return callWithRateLimitRetry(ctx, func() ([]dnshe.Subdomain, error) {
+		return s.dnsClient.ListSubdomains(ctx)
+	})
+}
+
+// renewSubdomainWithRateLimitRetry 对续期请求中的 DNSHE 限流错误做有限退避重试。
+func (s *Service) renewSubdomainWithRateLimitRetry(ctx context.Context, subdomainID int) (dnshe.RenewResult, error) {
+	return callWithRateLimitRetry(ctx, func() (dnshe.RenewResult, error) {
+		return s.dnsClient.RenewSubdomain(ctx, subdomainID)
+	})
+}
+
+// callWithRateLimitRetry 对单个 DNSHE API 调用套用限流退避策略。
+func callWithRateLimitRetry[T any](ctx context.Context, call func() (T, error)) (T, error) {
+	var result T
+	for attempt := 0; ; attempt++ {
+		callResult, err := call()
+		if err == nil {
+			return callResult, nil
+		}
+		result = callResult
+
+		if attempt >= maxRateLimitRetries || !isRateLimitError(err) {
+			return result, err
+		}
+
+		delay := rateLimitRetryInterval(time.Now().UTC(), err, attempt)
+		if waitErr := sleepContext(ctx, delay); waitErr != nil {
+			return result, waitErr
+		}
+	}
+}
+
+// isRateLimitError 判断错误是否为 DNSHE V2 限流错误。
+func isRateLimitError(err error) bool {
+	var apiErr *dnshe.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.ErrorCode == rateLimitErrorCode || apiErr.StatusCode == http.StatusTooManyRequests
+}
+
+// rateLimitRetryInterval 优先使用 ResetAt，缺失或不可解析时退回到短递增间隔。
+func rateLimitRetryInterval(now time.Time, err error, attempt int) time.Duration {
+	var apiErr *dnshe.APIError
+	if errors.As(err, &apiErr) {
+		if resetAt, ok := parseSubdomainTime(apiErr.ResetAt); ok && resetAt.After(now) {
+			delay := resetAt.Sub(now)
+			if delay > maxRateLimitRetryInterval {
+				return maxRateLimitRetryInterval
+			}
+			return delay
+		}
+	}
+
+	delay := time.Duration(attempt+1) * time.Second
+	if delay > maxRateLimitRetryInterval {
+		return maxRateLimitRetryInterval
+	}
+	return delay
+}
+
+// sleepContext 在等待退避间隔时响应整体超时和系统信号取消。
+func sleepContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // describeDomains 汇总账号下子域名的可展示域名和到期时间。

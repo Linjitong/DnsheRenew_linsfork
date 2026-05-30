@@ -324,3 +324,209 @@ func TestRunTreatsRenewNotYetAvailableAsSkip(t *testing.T) {
 		t.Fatalf("domains len = %d, want 1", len(result.Domains))
 	}
 }
+
+func TestRunRetriesListWhenRateLimited(t *testing.T) {
+	listCalls := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		action := r.URL.Query().Get("action")
+		w.Header().Set("Content-Type", "application/json")
+
+		if action != "list" {
+			t.Fatalf("unexpected action: %q", action)
+		}
+
+		listCalls++
+		if listCalls == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error_code": "rate_limit_exceeded",
+				"message":    "Rate limit exceeded",
+				"details": map[string]any{
+					"reset_at": time.Now().UTC().Add(10 * time.Millisecond).Format(time.RFC3339Nano),
+				},
+			})
+			return
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success":    true,
+			"count":      0,
+			"subdomains": []map[string]any{},
+		})
+	}))
+	defer server.Close()
+
+	client, err := dnshe.NewClient(dnshe.Config{
+		BaseURL:    server.URL,
+		APIKey:     "test-key",
+		APISecret:  "test-secret",
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+
+	service, err := NewService(client)
+	if err != nil {
+		t.Fatalf("NewService returned error: %v", err)
+	}
+
+	result, err := service.Run(context.Background(), false)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if listCalls != 2 {
+		t.Fatalf("list calls = %d, want 2", listCalls)
+	}
+	if result.Matched != 0 || result.Renewed != 0 || result.Failed != 0 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestRunRetriesRenewWhenRateLimited(t *testing.T) {
+	now := time.Now().UTC()
+	renewCalls := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		action := r.URL.Query().Get("action")
+		w.Header().Set("Content-Type", "application/json")
+
+		switch action {
+		case "list":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": true,
+				"count":   1,
+				"subdomains": []map[string]any{
+					{
+						"id":          1,
+						"subdomain":   "api",
+						"rootdomain":  "example.com",
+						"full_domain": "api.example.com",
+						"status":      "active",
+						"created_at":  now.Add(-220 * 24 * time.Hour).Format("2006-01-02 15:04:05"),
+					},
+				},
+			})
+		case "renew":
+			renewCalls++
+			if renewCalls == 1 {
+				w.WriteHeader(http.StatusTooManyRequests)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"error_code": "rate_limit_exceeded",
+					"message":    "Rate limit exceeded",
+					"details": map[string]any{
+						"reset_at": time.Now().UTC().Add(10 * time.Millisecond).Format(time.RFC3339Nano),
+					},
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success":             true,
+				"message":             "Subdomain renewed successfully",
+				"subdomain_id":        1,
+				"subdomain":           "api.example.com",
+				"previous_expires_at": now.Add(145 * 24 * time.Hour).Format("2006-01-02 15:04:05"),
+				"new_expires_at":      now.Add(510 * 24 * time.Hour).Format("2006-01-02 15:04:05"),
+				"renewed_at":          now.Format("2006-01-02 15:04:05"),
+				"remaining_days":      365,
+			})
+		default:
+			t.Fatalf("unexpected action: %q", action)
+		}
+	}))
+	defer server.Close()
+
+	client, err := dnshe.NewClient(dnshe.Config{
+		BaseURL:    server.URL,
+		APIKey:     "test-key",
+		APISecret:  "test-secret",
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+
+	service, err := NewService(client)
+	if err != nil {
+		t.Fatalf("NewService returned error: %v", err)
+	}
+
+	result, err := service.Run(context.Background(), false)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if renewCalls != 2 {
+		t.Fatalf("renew calls = %d, want 2", renewCalls)
+	}
+	if result.Renewed != 1 || result.Failed != 0 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestRunStopsRetryingAfterRateLimitRetriesAreExhausted(t *testing.T) {
+	now := time.Now().UTC()
+	renewCalls := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		action := r.URL.Query().Get("action")
+		w.Header().Set("Content-Type", "application/json")
+
+		switch action {
+		case "list":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": true,
+				"count":   1,
+				"subdomains": []map[string]any{
+					{
+						"id":          1,
+						"subdomain":   "api",
+						"rootdomain":  "example.com",
+						"full_domain": "api.example.com",
+						"status":      "active",
+						"created_at":  now.Add(-220 * 24 * time.Hour).Format("2006-01-02 15:04:05"),
+					},
+				},
+			})
+		case "renew":
+			renewCalls++
+			w.WriteHeader(http.StatusTooManyRequests)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error_code": "rate_limit_exceeded",
+				"message":    "Rate limit exceeded",
+				"details": map[string]any{
+					"reset_at": time.Now().UTC().Add(10 * time.Millisecond).Format(time.RFC3339Nano),
+				},
+			})
+		default:
+			t.Fatalf("unexpected action: %q", action)
+		}
+	}))
+	defer server.Close()
+
+	client, err := dnshe.NewClient(dnshe.Config{
+		BaseURL:    server.URL,
+		APIKey:     "test-key",
+		APISecret:  "test-secret",
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+
+	service, err := NewService(client)
+	if err != nil {
+		t.Fatalf("NewService returned error: %v", err)
+	}
+
+	result, err := service.Run(context.Background(), false)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if renewCalls != maxRateLimitRetries+1 {
+		t.Fatalf("renew calls = %d, want %d", renewCalls, maxRateLimitRetries+1)
+	}
+	if result.Renewed != 0 || result.Failed != 1 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}

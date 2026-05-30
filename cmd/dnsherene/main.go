@@ -8,6 +8,8 @@ import (
 	"dnsherene/internal/runner"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 )
 
 // main 加载配置并执行一次续期任务。
@@ -24,7 +26,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx := context.Background()
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	ctx, cancel := context.WithTimeout(signalCtx, cfg.RunTimeout)
+	defer cancel()
+
 	info, err := runner.Execute(ctx, cfg)
 	if notifyErr := notifier.Notify(ctx, info); notifyErr != nil {
 		output.WritePrefixedPublicErrorReport(os.Stderr, "notification_error", notifyErr)

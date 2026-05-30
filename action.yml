@@ -15,6 +15,9 @@ inputs:
     description: 是否启用演练模式；支持 true/false。
     required: false
     default: "false"
+  run-timeout:
+    description: 单次执行整体超时，使用 Go duration 格式，例如 10m。
+    required: false
   debug:
     description: 是否启用控制台调试通知；支持 true/false。
     required: false
@@ -85,6 +88,7 @@ runs:
         INPUT_API_SECRETS: ${{ inputs.api-secrets }}
         INPUT_API_BASE_URL: ${{ inputs.api-base-url }}
         INPUT_DRY_RUN: ${{ inputs.dry-run }}
+        INPUT_RUN_TIMEOUT: ${{ inputs.run-timeout }}
         INPUT_DEBUG: ${{ inputs.debug }}
         INPUT_TELEGRAM_BOT_TOKEN: ${{ inputs.telegram-bot-token }}
         INPUT_TELEGRAM_CHAT_ID: ${{ inputs.telegram-chat-id }}

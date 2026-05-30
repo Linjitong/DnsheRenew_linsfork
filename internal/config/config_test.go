@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestResolveCredentialsSingleItem(t *testing.T) {
 	creds, err := resolveCredentials("key-1", "secret-1")
@@ -77,5 +80,41 @@ func TestLoadWithLookup(t *testing.T) {
 	}
 	if !cfg.DryRun {
 		t.Fatalf("expected DryRun=true")
+	}
+	if cfg.RunTimeout != DefaultRunTimeout {
+		t.Fatalf("RunTimeout = %v, want %v", cfg.RunTimeout, DefaultRunTimeout)
+	}
+}
+
+func TestLoadWithLookupRunTimeout(t *testing.T) {
+	values := map[string]string{
+		"DNSHE_API_KEYS":    "k1",
+		"DNSHE_API_SECRETS": "s1",
+		"DNSHE_RUN_TIMEOUT": "2m30s",
+	}
+
+	cfg, err := loadWithLookup(func(key string) string {
+		return values[key]
+	})
+	if err != nil {
+		t.Fatalf("loadWithLookup returned error: %v", err)
+	}
+	if cfg.RunTimeout != 150*time.Second {
+		t.Fatalf("RunTimeout = %v, want 2m30s", cfg.RunTimeout)
+	}
+}
+
+func TestLoadWithLookupInvalidRunTimeout(t *testing.T) {
+	values := map[string]string{
+		"DNSHE_API_KEYS":    "k1",
+		"DNSHE_API_SECRETS": "s1",
+		"DNSHE_RUN_TIMEOUT": "soon",
+	}
+
+	_, err := loadWithLookup(func(key string) string {
+		return values[key]
+	})
+	if err == nil {
+		t.Fatalf("expected error, got nil")
 	}
 }

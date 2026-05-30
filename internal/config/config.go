@@ -4,7 +4,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 )
+
+// DefaultRunTimeout 是 CLI 单次执行的默认整体超时时间。
+const DefaultRunTimeout = 10 * time.Minute
 
 // APICredential 表示一组 DNSHE API 凭证。
 type APICredential struct {
@@ -23,6 +27,8 @@ type Config struct {
 	APIBaseURL string
 	// DryRun 为 true 时只做演练，不执行续期请求。
 	DryRun bool
+	// RunTimeout 是一次 CLI 主流程允许运行的最长时间。
+	RunTimeout time.Duration
 	// Notification 是通知模块所需的全部配置。
 	Notification NotificationConfig
 }
@@ -37,7 +43,14 @@ func loadWithLookup(lookup func(string) string) (Config, error) {
 	cfg := Config{
 		APIBaseURL: strings.TrimSpace(lookup("DNSHE_API_BASE_URL")),
 		DryRun:     parseBool(lookup("DNSHE_DRY_RUN")),
+		RunTimeout: DefaultRunTimeout,
 	}
+
+	runTimeout, err := parseRunTimeout(lookup("DNSHE_RUN_TIMEOUT"))
+	if err != nil {
+		return cfg, err
+	}
+	cfg.RunTimeout = runTimeout
 
 	creds, err := resolveCredentials(
 		strings.TrimSpace(lookup("DNSHE_API_KEYS")),
@@ -124,4 +137,21 @@ func parseBool(raw string) bool {
 	default:
 		return false
 	}
+}
+
+// parseRunTimeout 解析 DNSHE_RUN_TIMEOUT；空值使用默认整体超时。
+func parseRunTimeout(raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return DefaultRunTimeout, nil
+	}
+
+	duration, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("DNSHE_RUN_TIMEOUT must be a duration like 10m or 30s: %w", err)
+	}
+	if duration <= 0 {
+		return 0, fmt.Errorf("DNSHE_RUN_TIMEOUT must be positive")
+	}
+	return duration, nil
 }

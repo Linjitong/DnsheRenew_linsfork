@@ -23,6 +23,8 @@ services:
       DNSHE_DEBUG: "false"
       # 可选：DNSHE API 基础地址，默认留空使用内置地址。
       DNSHE_API_BASE_URL: ""
+      # 可选：单次执行整体超时，使用 Go duration 格式；默认 10m。
+      DNSHE_RUN_TIMEOUT: "10m"
 
       # 可选：Telegram 通知配置；不使用时请保持为空。
       DNSHE_NOTIFY_TELEGRAM_BOT_TOKEN: ""

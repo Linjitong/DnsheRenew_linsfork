@@ -17,6 +17,7 @@
 - 自动识别进入续期窗口的域名，只续期剩余时间小于 `180` 天的子域名
 - 支持多账号批量执行，单个账号失败不会中断其他账号
 - 支持 `dry-run` 演练模式，先看匹配结果再决定是否真实执行
+- 遇到 DNSHE 限流时会按 `reset_at` 做有限次数退避重试
 - 支持控制台调试输出、Telegram 机器人通知、Lark 通知、Webhook 通知
 - 私有通知会带每个账号的域名列表、当前到期时间、续期结果和失败原因
 - 公开输出默认只保留 `renewed_total` 和脱敏后的错误摘要
@@ -98,6 +99,7 @@ jobs:
 
 - `DNSHE_DRY_RUN`
 - `DNSHE_API_BASE_URL`
+- `DNSHE_RUN_TIMEOUT`
 - `DNSHE_DEBUG`
 - `DNSHE_NOTIFY_TELEGRAM_BOT_TOKEN`
 - `DNSHE_NOTIFY_TELEGRAM_CHAT_ID`
@@ -150,6 +152,7 @@ Telegram 通知会使用格式化消息输出，并在内容较长时自动分�
   - `DNSHE_NOTIFY_WEBHOOK_TOKEN`
 - GitHub Variables
   - `DNSHE_API_BASE_URL`
+  - `DNSHE_RUN_TIMEOUT`
 
 ## 本地运行
 
@@ -188,6 +191,17 @@ go run ./cmd/dnsherene
 ```
 
 开启 `DNSHE_DEBUG=true` 后，详细通知会同步输出到控制台，便于本地排查。
+
+整体超时：
+
+```bash
+DNSHE_API_KEYS="cfsd_xxx" \
+DNSHE_API_SECRETS="yyy" \
+DNSHE_RUN_TIMEOUT=10m \
+go run ./cmd/dnsherene
+```
+
+`DNSHE_RUN_TIMEOUT` 使用 Go duration 格式，例如 `5m`、`10m`、`30s`；默认 `10m`。
 
 ## Docker / Compose
 
@@ -260,11 +274,21 @@ docker compose run --rm dnsherene run
   - `RegenerateAPIKey`
 - `quota`
   - `GetQuota`
+- `whois`
+  - `NewPublicClient`
+  - `Whois`
+- `permanent_upgrade`
+  - `ListPermanentUpgrades`
+  - `CreatePermanentUpgrade`
+  - `AssistPermanentUpgrade`
+  - `CancelPermanentUpgrade`
 
 SDK 额外处理了这些细节：
 
 - HTTP 错误和 `success=false` 业务错误统一返回 `*dnshe.APIError`
-- 限流字段会保留在结构化错误中
+- V2 统一错误结构中的 `error_code`、`details`、`request_id`、限流 `limit/remaining/reset_at` 会保留在结构化错误中
+- 子域名列表支持 V2 新增的分页、筛选、排序和字段裁剪参数，并可读取 `count` 与 `pagination`
+- DNS 记录支持 V2 扩展字段和类型，包括线路、代理状态、SRV 的 weight/port/target 以及 CAA 的 flag/tag/value
 - `RenewSubdomain` 已包含续期相关返回字段
 - DNS 记录创建前会做基础参数校验
 

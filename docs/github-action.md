@@ -42,6 +42,7 @@ jobs:
           api-keys: ${{ secrets.DNSHE_API_KEYS }}
           api-secrets: ${{ secrets.DNSHE_API_SECRETS }}
           api-base-url: ${{ vars.DNSHE_API_BASE_URL }}
+          run-timeout: ${{ vars.DNSHE_RUN_TIMEOUT }}
           telegram-bot-token: ${{ secrets.DNSHE_NOTIFY_TELEGRAM_BOT_TOKEN }}
           telegram-chat-id: ${{ secrets.DNSHE_NOTIFY_TELEGRAM_CHAT_ID }}
           telegram-message-thread-id: ${{ secrets.DNSHE_NOTIFY_TELEGRAM_MESSAGE_THREAD_ID }}
@@ -58,6 +59,7 @@ jobs:
 | `api-secrets` | DNSHE API Secret 列表，顺序需与 `api-keys` 一一对应 | 是 | `secret_a,secret_b` |
 | `api-base-url` | DNSHE API 基础地址 | 否 | `https://dnshe.example.com` |
 | `dry-run` | 是否启用演练模式 | 否 | `true` |
+| `run-timeout` | 单次执行整体超时，使用 Go duration 格式 | 否 | `10m` |
 | `debug` | 是否启用控制台调试通知 | 否 | `true` |
 | `telegram-bot-token` | Telegram Bot Token | 否 | `123456:abcdef` |
 | `telegram-chat-id` | Telegram 目标聊天 ID | 否 | `-1001234567890` |
