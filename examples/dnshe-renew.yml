@@ -42,6 +42,9 @@ jobs:
           # 可选：自定义 DNSHE API 地址
           # api-base-url: ${{ vars.DNSHE_API_BASE_URL }}
 
+          # 可选：单次执行整体超时
+          # run-timeout: ${{ vars.DNSHE_RUN_TIMEOUT }}
+
           # 可选：Telegram 通知
           # telegram-bot-token: ${{ secrets.DNSHE_NOTIFY_TELEGRAM_BOT_TOKEN }}
           # telegram-chat-id: ${{ secrets.DNSHE_NOTIFY_TELEGRAM_CHAT_ID }}

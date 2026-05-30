@@ -26,11 +26,19 @@ func Execute(ctx context.Context, cfg config.Config) (report.Info, error) {
 	var runErrs []error
 	total := len(cfg.Credentials)
 	for i, cred := range cfg.Credentials {
+		if err := ctx.Err(); err != nil {
+			runErrs = append(runErrs, err)
+			break
+		}
+
 		account, err := runAccount(ctx, cfg, cred, i+1, total)
 		info.RenewedTotal += account.Renewed
 		info.Accounts = append(info.Accounts, account)
 		if err != nil {
 			runErrs = append(runErrs, err)
+			if ctx.Err() != nil {
+				break
+			}
 		}
 	}
 
