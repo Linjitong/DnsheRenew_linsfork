@@ -12,10 +12,10 @@ const DefaultBaseURL = "https://api005.dnshe.com/index.php"
 
 // Config 定义 DNSHE SDK 的初始化参数。
 type Config struct {
-	BaseURL    string
-	APIKey     string
-	APISecret  string
-	HTTPClient *http.Client
+	BaseURL    string       // API 基础地址；为空时使用 DefaultBaseURL。
+	APIKey     string       // DNSHE API Key，必填。
+	APISecret  string       // DNSHE API Secret，必填。
+	HTTPClient *http.Client // 自定义 HTTP 客户端；为空时使用 20 秒超时的默认客户端。
 }
 
 // Client 封装 DNSHE API 调用细节（鉴权、请求构建、错误解析）。

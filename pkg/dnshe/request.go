@@ -12,17 +12,58 @@ import (
 )
 
 type baseResponse struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
-	Error   string `json:"error"`
+	Success   bool            `json:"success"`
+	Message   string          `json:"message"`
+	Error     string          `json:"error"`
+	ErrorCode string          `json:"error_code"`
+	Details   apiErrorDetails `json:"details"`
+}
+
+func (r baseResponse) detailsMap() map[string]any {
+	return r.Details.Map
 }
 
 type apiError struct {
-	Error     string `json:"error"`
-	Message   string `json:"message"`
-	Limit     *int   `json:"limit"`
-	Remaining *int   `json:"remaining"`
-	ResetAt   string `json:"reset_at"`
+	Error     string          `json:"error"`
+	Message   string          `json:"message"`
+	ErrorCode string          `json:"error_code"`
+	Details   apiErrorDetails `json:"details"`
+	Limit     *int            `json:"limit"`
+	Remaining *int            `json:"remaining"`
+	ResetAt   string          `json:"reset_at"`
+}
+
+type apiErrorDetails struct {
+	RequestID string
+	Limit     *int
+	Remaining *int
+	ResetAt   string
+	Map       map[string]any
+}
+
+func (d *apiErrorDetails) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return nil
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	d.Map = raw
+	if value, ok := raw["request_id"].(string); ok {
+		d.RequestID = value
+	}
+	if value, ok := numberFromAny(raw["limit"]); ok {
+		d.Limit = &value
+	}
+	if value, ok := numberFromAny(raw["remaining"]); ok {
+		d.Remaining = &value
+	}
+	if value, ok := raw["reset_at"].(string); ok {
+		d.ResetAt = value
+	}
+	return nil
 }
 
 // requestJSON 是统一 HTTP 调用入口，负责公共 query/header 与通用错误处理。
@@ -66,8 +107,12 @@ func (c *Client) requestJSON(
 	if err != nil {
 		return fmt.Errorf("build request failed: %w", err)
 	}
-	req.Header.Set("X-API-Key", c.apiKey)
-	req.Header.Set("X-API-Secret", c.apiSecret)
+	if c.apiKey != "" {
+		req.Header.Set("X-API-Key", c.apiKey)
+	}
+	if c.apiSecret != "" {
+		req.Header.Set("X-API-Secret", c.apiSecret)
+	}
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -104,8 +149,14 @@ func ensureSuccess(operation string, resp baseResponse) error {
 	}
 	return &APIError{
 		Operation: operation,
+		ErrorCode: strings.TrimSpace(resp.ErrorCode),
 		ErrorText: strings.TrimSpace(resp.Error),
 		Message:   strings.TrimSpace(resp.Message),
+		RequestID: strings.TrimSpace(resp.Details.RequestID),
+		Limit:     resp.Details.Limit,
+		Remaining: resp.Details.Remaining,
+		ResetAt:   strings.TrimSpace(resp.Details.ResetAt),
+		Details:   resp.detailsMap(),
 	}
 }
 
@@ -120,11 +171,14 @@ func decodeAPIError(statusCode int, body []byte) error {
 	if err := json.Unmarshal(body, &payload); err == nil {
 		apiErr := &APIError{
 			StatusCode: statusCode,
+			ErrorCode:  strings.TrimSpace(payload.ErrorCode),
 			ErrorText:  strings.TrimSpace(payload.Error),
 			Message:    strings.TrimSpace(payload.Message),
-			Limit:      payload.Limit,
-			Remaining:  payload.Remaining,
-			ResetAt:    strings.TrimSpace(payload.ResetAt),
+			RequestID:  strings.TrimSpace(payload.Details.RequestID),
+			Limit:      firstIntPtr(payload.Limit, payload.Details.Limit),
+			Remaining:  firstIntPtr(payload.Remaining, payload.Details.Remaining),
+			ResetAt:    firstNonEmpty(payload.ResetAt, payload.Details.ResetAt),
+			Details:    payload.Details.Map,
 			RawBody:    truncate(body, 256),
 		}
 		return apiErr
@@ -134,6 +188,26 @@ func decodeAPIError(statusCode int, body []byte) error {
 		errResp.RawBody = "empty response"
 	}
 	return errResp
+}
+
+func numberFromAny(value any) (int, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return int(typed), true
+	case int:
+		return typed, true
+	default:
+		return 0, false
+	}
+}
+
+func firstIntPtr(values ...*int) *int {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
 }
 
 // truncate 截断过长响应体，避免错误信息无限增长。
