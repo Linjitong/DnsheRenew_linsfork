@@ -13,12 +13,20 @@ type listSubdomainsResponse struct {
 	baseResponse
 	Count      int         `json:"count"`
 	Subdomains []Subdomain `json:"subdomains"`
+	Pagination Pagination  `json:"pagination"`
 }
 
 type registerSubdomainResponse struct {
 	baseResponse
 	SubdomainID int    `json:"subdomain_id"`
 	FullDomain  string `json:"full_domain"`
+}
+
+type deleteSubdomainResponse struct {
+	baseResponse
+	SubdomainID       int    `json:"subdomain_id"`
+	FullDomain        string `json:"full_domain"`
+	DNSRecordsDeleted int    `json:"dns_records_deleted"`
 }
 
 type getSubdomainResponse struct {
@@ -30,26 +38,47 @@ type getSubdomainResponse struct {
 
 type renewSubdomainResponse struct {
 	baseResponse
-	SubdomainID       int    `json:"subdomain_id"`
-	Subdomain         string `json:"subdomain"`
-	PreviousExpiresAt string `json:"previous_expires_at"`
-	NewExpiresAt      string `json:"new_expires_at"`
-	RenewedAt         string `json:"renewed_at"`
-	NeverExpires      int    `json:"never_expires"`
-	Status            string `json:"status"`
-	RemainingDays     int    `json:"remaining_days"`
+	SubdomainID       int     `json:"subdomain_id"`
+	Subdomain         string  `json:"subdomain"`
+	PreviousExpiresAt string  `json:"previous_expires_at"`
+	NewExpiresAt      string  `json:"new_expires_at"`
+	RenewedAt         string  `json:"renewed_at"`
+	NeverExpires      int     `json:"never_expires"`
+	Status            string  `json:"status"`
+	RemainingDays     int     `json:"remaining_days"`
+	ChargedAmount     float64 `json:"charged_amount"`
 }
 
 // ListSubdomains 获取当前账号可见的子域名列表。
+//
+// Deprecated: 请使用 ListSubdomainsWithOptions，以便读取 count 和 pagination 元数据。
 func (c *Client) ListSubdomains(ctx context.Context) ([]Subdomain, error) {
-	var out listSubdomainsResponse
-	if err := c.requestJSON(ctx, http.MethodGet, "subdomains", "list", nil, nil, &out); err != nil {
+	result, err := c.ListSubdomainsWithOptions(ctx, ListSubdomainsOptions{})
+	if err != nil {
 		return nil, err
+	}
+	return result.Subdomains, nil
+}
+
+// ListSubdomainsWithOptions 获取当前账号可见的子域名列表，并返回分页上下文。
+func (c *Client) ListSubdomainsWithOptions(ctx context.Context, opts ListSubdomainsOptions) (ListSubdomainsResult, error) {
+	query, err := listSubdomainsQuery(opts)
+	if err != nil {
+		return ListSubdomainsResult{}, err
+	}
+
+	var out listSubdomainsResponse
+	if err := c.requestJSON(ctx, http.MethodGet, "subdomains", "list", query, nil, &out); err != nil {
+		return ListSubdomainsResult{}, err
 	}
 	if err := ensureSuccess("list subdomains", out.baseResponse); err != nil {
-		return nil, err
+		return ListSubdomainsResult{}, err
 	}
-	return out.Subdomains, nil
+	return ListSubdomainsResult{
+		Count:      out.Count,
+		Subdomains: out.Subdomains,
+		Pagination: out.Pagination,
+	}, nil
 }
 
 // RegisterSubdomain 注册新的子域名。
@@ -108,20 +137,36 @@ func (c *Client) GetSubdomain(ctx context.Context, subdomainID int) (SubdomainDe
 }
 
 // DeleteSubdomain 删除指定子域名。
+//
+// Deprecated: 请使用 DeleteSubdomainWithResult，以便读取 full_domain 和 dns_records_deleted。
 func (c *Client) DeleteSubdomain(ctx context.Context, subdomainID int) error {
+	_, err := c.DeleteSubdomainWithResult(ctx, subdomainID)
+	return err
+}
+
+// DeleteSubdomainWithResult 删除指定子域名，并返回服务端提供的删除结果。
+func (c *Client) DeleteSubdomainWithResult(ctx context.Context, subdomainID int) (DeleteSubdomainResult, error) {
 	if subdomainID <= 0 {
-		return fmt.Errorf("subdomainID must be positive")
+		return DeleteSubdomainResult{}, fmt.Errorf("subdomainID must be positive")
 	}
 
 	payload := map[string]any{
 		"subdomain_id": subdomainID,
 	}
 
-	var out baseResponse
+	var out deleteSubdomainResponse
 	if err := c.requestJSON(ctx, http.MethodPost, "subdomains", "delete", nil, payload, &out); err != nil {
-		return err
+		return DeleteSubdomainResult{}, err
 	}
-	return ensureSuccess("delete subdomain", out)
+	if err := ensureSuccess("delete subdomain", out.baseResponse); err != nil {
+		return DeleteSubdomainResult{}, err
+	}
+	return DeleteSubdomainResult{
+		SubdomainID:       out.SubdomainID,
+		FullDomain:        out.FullDomain,
+		DNSRecordsDeleted: out.DNSRecordsDeleted,
+		Message:           strings.TrimSpace(out.Message),
+	}, nil
 }
 
 // RenewSubdomain 按子域名 ID 发起续期请求。
@@ -152,5 +197,58 @@ func (c *Client) RenewSubdomain(ctx context.Context, subdomainID int) (RenewResu
 		NeverExpires:      out.NeverExpires != 0,
 		Status:            out.Status,
 		RemainingDays:     out.RemainingDays,
+		ChargedAmount:     out.ChargedAmount,
 	}, nil
+}
+
+func listSubdomainsQuery(opts ListSubdomainsOptions) (url.Values, error) {
+	query := url.Values{}
+	if opts.Page < 0 {
+		return nil, fmt.Errorf("page must be positive")
+	}
+	if opts.PerPage < 0 {
+		return nil, fmt.Errorf("perPage must be positive")
+	}
+	if opts.Page > 0 {
+		query.Set("page", strconv.Itoa(opts.Page))
+	}
+	if opts.PerPage > 0 {
+		query.Set("per_page", strconv.Itoa(opts.PerPage))
+	}
+	if opts.IncludeTotal {
+		query.Set("include_total", "1")
+	}
+	if search := strings.TrimSpace(opts.Search); search != "" {
+		query.Set("search", search)
+	}
+	if rootdomain := strings.TrimSpace(opts.Rootdomain); rootdomain != "" {
+		query.Set("rootdomain", rootdomain)
+	}
+	if status := strings.TrimSpace(opts.Status); status != "" {
+		query.Set("status", status)
+	}
+	if createdFrom := strings.TrimSpace(opts.CreatedFrom); createdFrom != "" {
+		query.Set("created_from", createdFrom)
+	}
+	if createdTo := strings.TrimSpace(opts.CreatedTo); createdTo != "" {
+		query.Set("created_to", createdTo)
+	}
+	if sortBy := strings.TrimSpace(opts.SortBy); sortBy != "" {
+		query.Set("sort_by", sortBy)
+	}
+	if sortDir := strings.TrimSpace(opts.SortDir); sortDir != "" {
+		query.Set("sort_dir", sortDir)
+	}
+	if len(opts.Fields) > 0 {
+		fields := make([]string, 0, len(opts.Fields))
+		for _, field := range opts.Fields {
+			if trimmed := strings.TrimSpace(field); trimmed != "" {
+				fields = append(fields, trimmed)
+			}
+		}
+		if len(fields) > 0 {
+			query.Set("fields", strings.Join(fields, ","))
+		}
+	}
+	return query, nil
 }
